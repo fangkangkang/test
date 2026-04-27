@@ -3,6 +3,7 @@ import { createRoot } from "https://esm.sh/react-dom@18.3.1/client";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.54.0";
 
 const SUPABASE_CONFIG = window.__SUPABASE_CONFIG__ || {};
+const RECENT_ACCOUNTS_STORAGE_KEY = "northline-recent-accounts";
 const HAS_SUPABASE_CONFIG = Boolean(
   SUPABASE_CONFIG.url &&
   SUPABASE_CONFIG.anonKey &&
@@ -36,6 +37,32 @@ const INITIAL_POST = {
   title: "",
   content: ""
 };
+
+function readRecentAccounts() {
+  try {
+    const raw = localStorage.getItem(RECENT_ACCOUNTS_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentAccounts(accounts) {
+  localStorage.setItem(RECENT_ACCOUNTS_STORAGE_KEY, JSON.stringify(accounts));
+}
+
+function rememberAccount(user) {
+  const nextAccounts = [
+    {
+      email: user.email,
+      name: user.name
+    },
+    ...readRecentAccounts().filter((account) => account.email !== user.email)
+  ].slice(0, 5);
+
+  saveRecentAccounts(nextAccounts);
+  return nextAccounts;
+}
 
 function getPasswordStrength(password) {
   let score = 0;
@@ -150,7 +177,9 @@ function AuthCard({
   updateRegister,
   handleLogin,
   handleRegister,
-  strength
+  strength,
+  recentAccounts,
+  chooseRecentAccount
 }) {
   return React.createElement("div", { className: "auth-card" },
     React.createElement("div", { className: "panel-header" },
@@ -192,7 +221,23 @@ function AuthCard({
           onChange: (event) => updateLogin("password", event.target.value)
         })
       ),
-      React.createElement("button", { type: "submit", className: "primary-btn", disabled: pending || !HAS_SUPABASE_CONFIG }, pending ? "登录中..." : "立即登录")
+      React.createElement("button", { type: "submit", className: "primary-btn", disabled: pending || !HAS_SUPABASE_CONFIG }, pending ? "登录中..." : "立即登录"),
+      recentAccounts.length > 0 && React.createElement("div", { className: "recent-panel" },
+        React.createElement("p", { className: "kicker" }, "RECENT ACCOUNTS"),
+        React.createElement("div", { className: "recent-list" },
+          recentAccounts.map((account) => (
+            React.createElement("button", {
+              key: account.email,
+              type: "button",
+              className: "recent-account",
+              onClick: () => chooseRecentAccount(account)
+            },
+              React.createElement("strong", null, account.name || "未命名用户"),
+              React.createElement("span", null, account.email)
+            )
+          ))
+        )
+      )
     ),
     mode === "register" && React.createElement("form", { className: "auth-form", onSubmit: handleRegister },
       React.createElement("label", null,
@@ -373,6 +418,7 @@ function App() {
   const [registerData, setRegisterData] = useState(INITIAL_REGISTER);
   const [postData, setPostData] = useState(INITIAL_POST);
   const [posts, setPosts] = useState([]);
+  const [recentAccounts, setRecentAccounts] = useState([]);
   const [status, setStatus] = useState({
     type: HAS_SUPABASE_CONFIG ? "default" : "error",
     message: HAS_SUPABASE_CONFIG
@@ -397,6 +443,7 @@ function App() {
 
     async function bootstrap() {
       try {
+        setRecentAccounts(readRecentAccounts());
         await refreshPosts();
         const currentUser = await getSupabaseSessionUser();
 
@@ -462,6 +509,15 @@ function App() {
     setPostData((current) => ({ ...current, [field]: value }));
   }
 
+  function chooseRecentAccount(account) {
+    setLoginData((current) => ({
+      ...current,
+      email: account.email
+    }));
+    setMode("login");
+    setStatus({ type: "default", message: `已填入 ${account.email}，请输入密码继续登录。` });
+  }
+
   async function handleRegister(event) {
     event.preventDefault();
     setPending(true);
@@ -502,6 +558,7 @@ function App() {
 
       if (data.session) {
         const currentUser = mapSupabaseUser(data.session.user);
+        setRecentAccounts(rememberAccount(currentUser));
         setSession(currentUser);
         await refreshPosts();
         setStatus({ type: "success", message: `注册成功，欢迎你，${currentUser.name}。你已自动登录。` });
@@ -538,6 +595,7 @@ function App() {
       }
 
       const currentUser = mapSupabaseUser(data.user);
+      setRecentAccounts(rememberAccount(currentUser));
       setSession(currentUser);
       await refreshPosts();
       setStatus({ type: "success", message: `登录成功，欢迎回来，${currentUser.name}。` });
@@ -667,7 +725,9 @@ function App() {
             updateRegister,
             handleLogin,
             handleRegister,
-            strength
+            strength,
+            recentAccounts,
+            chooseRecentAccount
           })
     )
   );
