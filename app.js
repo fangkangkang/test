@@ -1,9 +1,28 @@
 import React, { useDeferredValue, useEffect, useState, startTransition } from "https://esm.sh/react@18.3.1";
 import { createRoot } from "https://esm.sh/react-dom@18.3.1/client";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.54.0";
 
 const USERS_STORAGE_KEY = "northline-demo-users";
 const SESSION_STORAGE_KEY = "northline-demo-session";
 const POSTS_STORAGE_KEY = "northline-demo-posts";
+
+const SUPABASE_CONFIG = window.__SUPABASE_CONFIG__ || {};
+const HAS_SUPABASE_CONFIG = Boolean(
+  SUPABASE_CONFIG.url &&
+  SUPABASE_CONFIG.anonKey &&
+  !SUPABASE_CONFIG.url.includes("your-project") &&
+  !SUPABASE_CONFIG.anonKey.includes("your-anon-key")
+);
+
+const supabase = HAS_SUPABASE_CONFIG
+  ? createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true
+      }
+    })
+  : null;
 
 const INITIAL_REGISTER = {
   name: "",
@@ -66,23 +85,23 @@ function saveUsers(users) {
   safeWrite(USERS_STORAGE_KEY, users);
 }
 
-function readSession() {
+function readLocalSession() {
   return safeRead(SESSION_STORAGE_KEY, null);
 }
 
-function saveSession(user) {
+function saveLocalSession(user) {
   safeWrite(SESSION_STORAGE_KEY, user);
 }
 
-function clearSession() {
+function clearLocalSession() {
   localStorage.removeItem(SESSION_STORAGE_KEY);
 }
 
-function readPosts() {
+function readLocalPosts() {
   return safeRead(POSTS_STORAGE_KEY, []);
 }
 
-function savePosts(posts) {
+function saveLocalPosts(posts) {
   safeWrite(POSTS_STORAGE_KEY, posts);
 }
 
@@ -98,6 +117,49 @@ function formatDate(timestamp) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(timestamp));
+}
+
+function mapSupabaseUser(user) {
+  if (!user) {
+    return null;
+  }
+
+  return {
+    id: user.id,
+    name: user.user_metadata?.name || user.email?.split("@")[0] || "访客",
+    email: user.email || ""
+  };
+}
+
+async function getSupabaseSessionUser() {
+  const { data, error } = await supabase.auth.getUser();
+
+  if (error) {
+    throw error;
+  }
+
+  return mapSupabaseUser(data.user);
+}
+
+async function loadSupabasePosts() {
+  const { data, error } = await supabase
+    .from("messages")
+    .select("id,title,content,created_at,user_id,author_name,author_email")
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    throw error;
+  }
+
+  return (data || []).map((post) => ({
+    id: String(post.id),
+    title: post.title,
+    content: post.content,
+    authorName: post.author_name,
+    authorEmail: post.author_email,
+    authorId: post.user_id,
+    createdAt: new Date(post.created_at).getTime()
+  }));
 }
 
 function PasswordInput({ id, value, placeholder, autoComplete, onChange }) {
@@ -133,7 +195,8 @@ function AuthCard({
   updateRegister,
   handleLogin,
   handleRegister,
-  strength
+  strength,
+  storageLabel
 }) {
   return React.createElement("div", { className: "auth-card" },
     React.createElement("div", { className: "panel-header" },
@@ -225,7 +288,7 @@ function AuthCard({
       React.createElement("button", { type: "submit", className: "primary-btn", disabled: pending }, pending ? "创建中..." : "创建账户")
     ),
     React.createElement("div", { className: "footer-note" },
-      React.createElement("p", { className: "subtle" }, "演示说明：当前版本将账号数据和留言保存在本浏览器的 localStorage 中，注册成功后会自动登录。")
+      React.createElement("p", { className: "subtle" }, `当前数据模式：${storageLabel}。没填 Supabase 配置时，页面会自动回退到本地演示模式。`)
     )
   );
 }
@@ -239,9 +302,16 @@ function HomeView({
   handlePostSubmit,
   handleDeletePost,
   handleLogout,
-  pending
+  pending,
+  storageLabel
 }) {
-  const myPosts = posts.filter((post) => post.authorEmail === session.email);
+  const myPosts = posts.filter((post) => {
+    if (session.id && post.authorId) {
+      return post.authorId === session.id;
+    }
+
+    return post.authorEmail === session.email;
+  });
 
   return React.createElement("div", { className: "home-shell" },
     React.createElement("section", { className: "hero-panel" },
@@ -254,6 +324,10 @@ function HomeView({
         React.createElement("div", { className: "meta-strip" },
           React.createElement("span", null, "当前账号"),
           React.createElement("strong", null, session.email)
+        ),
+        React.createElement("div", { className: "meta-strip" },
+          React.createElement("span", null, "数据来源"),
+          React.createElement("strong", null, storageLabel)
         ),
         React.createElement("button", {
           type: "button",
@@ -319,7 +393,7 @@ function HomeView({
           React.createElement("p", { className: "kicker" }, "LIVE POSTS"),
           React.createElement("h2", null, "留言板")
         ),
-        React.createElement("p", { className: "subtle" }, "当前浏览器里的访客都可以看到这里的留言。")
+        React.createElement("p", { className: "subtle" }, "数据库模式下，多设备登录也能看到同一批留言。")
       ),
       posts.length === 0
         ? React.createElement("div", { className: "empty-state" }, "还没有留言，发第一条吧。")
@@ -331,11 +405,12 @@ function HomeView({
                   React.createElement("h3", null, post.title),
                   React.createElement("p", { className: "post-meta" }, `${post.authorName} · ${formatDate(post.createdAt)}`)
                 ),
-                post.authorEmail === session.email && React.createElement("button", {
-                  type: "button",
-                  className: "text-btn",
-                  onClick: () => handleDeletePost(post.id)
-                }, "删除")
+                (((session.id && post.authorId === session.id) || (!session.id && post.authorEmail === session.email))) &&
+                  React.createElement("button", {
+                    type: "button",
+                    className: "text-btn",
+                    onClick: () => handleDeletePost(post.id)
+                  }, "删除")
               ),
               React.createElement("p", { className: "post-content" }, post.content)
             )
@@ -356,22 +431,81 @@ function App() {
   const [pending, setPending] = useState(false);
   const deferredPassword = useDeferredValue(registerData.password);
   const strength = strengthMeta(getPasswordStrength(deferredPassword));
+  const storageLabel = HAS_SUPABASE_CONFIG ? "Supabase 数据库" : "本地演示模式";
+
+  async function refreshPosts() {
+    if (HAS_SUPABASE_CONFIG) {
+      setPosts(await loadSupabasePosts());
+      return;
+    }
+
+    setPosts(readLocalPosts());
+  }
 
   useEffect(() => {
-    setPosts(readPosts());
-    const savedSession = readSession();
+    let active = true;
+    let subscription;
 
-    if (savedSession) {
-      setSession(savedSession);
-      setStatus({ type: "success", message: `已登录，欢迎回来，${savedSession.name}。` });
-    } else {
-      setStatus({ type: "warning", message: "当前未登录，你可以先注册一个演示账号。" });
+    async function bootstrap() {
+      try {
+        await refreshPosts();
+
+        if (HAS_SUPABASE_CONFIG) {
+          const currentUser = await getSupabaseSessionUser();
+
+          if (!active) {
+            return;
+          }
+
+          if (currentUser) {
+            setSession(currentUser);
+            setStatus({ type: "success", message: `已登录，欢迎回来，${currentUser.name}。` });
+          } else {
+            setStatus({ type: "warning", message: "当前未登录，请使用数据库账号登录。" });
+          }
+
+          const authListener = supabase.auth.onAuthStateChange(async (_event, currentSession) => {
+            if (!active) {
+              return;
+            }
+
+            const mappedUser = mapSupabaseUser(currentSession?.user || null);
+            setSession(mappedUser);
+
+            if (!mappedUser) {
+              setStatus({ type: "default", message: "你已退出登录。" });
+            }
+          });
+
+          subscription = authListener.data.subscription;
+        } else {
+          const savedSession = readLocalSession();
+
+          if (savedSession) {
+            setSession(savedSession);
+            setStatus({ type: "success", message: `已登录，欢迎回来，${savedSession.name}。` });
+          } else {
+            setStatus({ type: "warning", message: "当前未登录，你可以先注册一个演示账号。" });
+          }
+        }
+      } catch (error) {
+        if (active) {
+          setStatus({ type: "error", message: error.message || "初始化失败，请检查配置。" });
+        }
+      }
     }
+
+    bootstrap();
+
+    return () => {
+      active = false;
+      subscription?.unsubscribe();
+    };
   }, []);
 
-  function syncPosts(nextPosts) {
+  function syncLocalPosts(nextPosts) {
     const sortedPosts = [...nextPosts].sort((a, b) => b.createdAt - a.createdAt);
-    savePosts(sortedPosts);
+    saveLocalPosts(sortedPosts);
     setPosts(sortedPosts);
   }
 
@@ -408,7 +542,6 @@ function App() {
       const email = normalizeEmail(registerData.email);
       const password = registerData.password;
       const confirmPassword = registerData.confirmPassword;
-      const users = readUsers();
 
       if (!name) {
         throw new Error("请输入用户名。");
@@ -426,27 +559,53 @@ function App() {
         throw new Error("两次输入的密码不一致。");
       }
 
-      if (users.some((user) => user.email === email)) {
-        throw new Error("该邮箱已被注册，请直接登录。");
+      if (HAS_SUPABASE_CONFIG) {
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: { name }
+          }
+        });
+
+        if (error) {
+          throw error;
+        }
+
+        if (data.session) {
+          const currentUser = mapSupabaseUser(data.session.user);
+          setSession(currentUser);
+          await refreshPosts();
+          setStatus({ type: "success", message: `注册成功，欢迎你，${currentUser.name}。你已自动登录。` });
+        } else {
+          setStatus({ type: "success", message: "注册成功。若 Supabase 开启了邮箱确认，请先验证邮箱后再登录。" });
+        }
+      } else {
+        const users = readUsers();
+
+        if (users.some((user) => user.email === email)) {
+          throw new Error("该邮箱已被注册，请直接登录。");
+        }
+
+        const user = { name, email, password };
+        saveUsers([...users, user]);
+
+        const persistedUser = readUsers().find((entry) => entry.email === email);
+        if (!persistedUser) {
+          throw new Error("当前浏览器禁止了本地存储，注册信息没有成功保存。");
+        }
+
+        const safeUser = { id: null, name: user.name, email: user.email };
+        saveLocalSession(safeUser);
+        setSession(safeUser);
+        setStatus({ type: "success", message: `注册成功，欢迎你，${user.name}。你已自动登录。` });
       }
 
-      const user = { name, email, password };
-      saveUsers([...users, user]);
-
-      const persistedUser = readUsers().find((entry) => entry.email === email);
-      if (!persistedUser) {
-        throw new Error("当前浏览器禁止了本地存储，注册信息没有成功保存。");
-      }
-
-      const safeUser = { name: user.name, email: user.email };
-      saveSession(safeUser);
-      setSession(safeUser);
       setRegisterData(INITIAL_REGISTER);
       setLoginData(INITIAL_LOGIN);
-      setStatus({ type: "success", message: `注册成功，欢迎你，${user.name}。你已自动登录。` });
       changeMode("login", false);
     } catch (error) {
-      setStatus({ type: "error", message: error.message });
+      setStatus({ type: "error", message: error.message || "注册失败，请检查数据库配置。" });
     } finally {
       setPending(false);
     }
@@ -459,43 +618,67 @@ function App() {
     try {
       const email = normalizeEmail(loginData.email);
       const password = loginData.password;
-      const user = readUsers().find((entry) => entry.email === email && entry.password === password);
 
       if (!validateEmail(email)) {
         throw new Error("请输入有效的邮箱地址。");
       }
 
-      if (!user) {
-        throw new Error("邮箱或密码不正确，请重试。");
+      if (HAS_SUPABASE_CONFIG) {
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+
+        if (error) {
+          throw error;
+        }
+
+        const currentUser = mapSupabaseUser(data.user);
+        setSession(currentUser);
+        await refreshPosts();
+        setStatus({ type: "success", message: `登录成功，欢迎回来，${currentUser.name}。` });
+      } else {
+        const user = readUsers().find((entry) => entry.email === email && entry.password === password);
+
+        if (!user) {
+          throw new Error("邮箱或密码不正确，请重试。");
+        }
+
+        const safeUser = { id: null, name: user.name, email: user.email };
+        saveLocalSession(safeUser);
+        setSession(safeUser);
+        setStatus({ type: "success", message: `登录成功，欢迎回来，${user.name}。` });
       }
 
-      const safeUser = { name: user.name, email: user.email };
-      saveSession(safeUser);
-      setSession(safeUser);
       setLoginData(INITIAL_LOGIN);
-      setStatus({ type: "success", message: `登录成功，欢迎回来，${user.name}。` });
     } catch (error) {
-      setStatus({ type: "error", message: error.message });
+      setStatus({ type: "error", message: error.message || "登录失败，请检查数据库配置。" });
     } finally {
       setPending(false);
     }
   }
 
-  function handleLogout() {
+  async function handleLogout() {
     setPending(true);
 
     try {
-      clearSession();
-      setSession(null);
+      if (HAS_SUPABASE_CONFIG) {
+        const { error } = await supabase.auth.signOut();
+
+        if (error) {
+          throw error;
+        }
+      } else {
+        clearLocalSession();
+        setSession(null);
+      }
+
       setStatus({ type: "default", message: "你已退出登录。" });
     } catch (error) {
-      setStatus({ type: "error", message: error.message });
+      setStatus({ type: "error", message: error.message || "退出登录失败。" });
     } finally {
       setPending(false);
     }
   }
 
-  function handlePostSubmit(event) {
+  async function handlePostSubmit(event) {
     event.preventDefault();
 
     try {
@@ -510,30 +693,67 @@ function App() {
         throw new Error("请先填写留言内容。");
       }
 
-      const nextPosts = [
-        {
-          id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+      if (HAS_SUPABASE_CONFIG) {
+        const { error } = await supabase.from("messages").insert({
           title,
           content,
-          authorName: session.name,
-          authorEmail: session.email,
-          createdAt: Date.now()
-        },
-        ...posts
-      ];
+          user_id: session.id,
+          author_name: session.name,
+          author_email: session.email
+        });
 
-      syncPosts(nextPosts);
+        if (error) {
+          throw error;
+        }
+
+        await refreshPosts();
+      } else {
+        const nextPosts = [
+          {
+            id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+            title,
+            content,
+            authorName: session.name,
+            authorEmail: session.email,
+            authorId: null,
+            createdAt: Date.now()
+          },
+          ...posts
+        ];
+
+        syncLocalPosts(nextPosts);
+      }
+
       setPostData(INITIAL_POST);
       setStatus({ type: "success", message: "留言发布成功，已经显示在留言板中。" });
     } catch (error) {
-      setStatus({ type: "error", message: error.message });
+      setStatus({ type: "error", message: error.message || "留言发布失败。" });
     }
   }
 
-  function handleDeletePost(postId) {
-    const nextPosts = posts.filter((post) => post.id !== postId);
-    syncPosts(nextPosts);
-    setStatus({ type: "default", message: "留言已删除。" });
+  async function handleDeletePost(postId) {
+    try {
+      if (HAS_SUPABASE_CONFIG) {
+        const { error } = await supabase
+          .from("messages")
+          .delete()
+          .eq("id", postId)
+          .eq("user_id", session.id);
+
+        if (error) {
+          throw error;
+        }
+
+        await refreshPosts();
+      } else {
+        const nextPosts = posts.filter((post) => post.id !== postId);
+        syncLocalPosts(nextPosts);
+      }
+
+      setStatus({ type: "default", message: "留言已删除。" });
+    } catch (error) {
+      setStatus({ type: "error", message: error.message || "删除留言失败。" });
+    }
   }
 
   return React.createElement("div", { className: `page-shell${session ? " authenticated" : ""}` },
@@ -541,19 +761,19 @@ function App() {
       React.createElement("div", { className: "brand-copy" },
         React.createElement("p", { className: "eyebrow" }, "NORTHLINE"),
         React.createElement("h1", null, "把登录、主页和留言，连成一个小站。"),
-        React.createElement("p", { className: "intro" }, "现在这个站点已经支持账号注册、登录、个人主页和本地持久化留言板。"),
+        React.createElement("p", { className: "intro" }, "这个分支已经准备好接 Supabase 数据库。填完配置后，注册、登录和留言就能跨设备同步；不填配置时依然可以本地演示。"),
         React.createElement("div", { className: "feature-list", "aria-label": "站点亮点" },
           React.createElement("div", null,
             React.createElement("span", null, "01"),
-            React.createElement("p", null, "登录与注册流程保持原样，交互更完整。")
+            React.createElement("p", null, "Supabase Auth 负责注册和登录，省掉自建密码逻辑。")
           ),
           React.createElement("div", null,
             React.createElement("span", null, "02"),
-            React.createElement("p", null, "登录后会进入独立主页，而不是停留在表单卡片。")
+            React.createElement("p", null, "留言通过 `messages` 表持久化，多个设备能看到同一批数据。")
           ),
           React.createElement("div", null,
             React.createElement("span", null, "03"),
-            React.createElement("p", null, "留言板适合做课程作业里的互动模块。")
+            React.createElement("p", null, `当前运行模式：${storageLabel}。`)
           )
         )
       )
@@ -561,29 +781,31 @@ function App() {
     React.createElement("section", { className: "auth-panel" },
       session
         ? React.createElement(HomeView, {
-          session,
-          status,
-          posts,
-          postData,
-          updatePost,
-          handlePostSubmit,
-          handleDeletePost,
-          handleLogout,
-          pending
-        })
+            session,
+            status,
+            posts,
+            postData,
+            updatePost,
+            handlePostSubmit,
+            handleDeletePost,
+            handleLogout,
+            pending,
+            storageLabel
+          })
         : React.createElement(AuthCard, {
-          mode,
-          changeMode,
-          status,
-          pending,
-          loginData,
-          registerData,
-          updateLogin,
-          updateRegister,
-          handleLogin,
-          handleRegister,
-          strength
-        })
+            mode,
+            changeMode,
+            status,
+            pending,
+            loginData,
+            registerData,
+            updateLogin,
+            updateRegister,
+            handleLogin,
+            handleRegister,
+            strength,
+            storageLabel
+          })
     )
   );
 }
