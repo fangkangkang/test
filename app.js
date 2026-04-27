@@ -2,10 +2,6 @@ import React, { useDeferredValue, useEffect, useState, startTransition } from "h
 import { createRoot } from "https://esm.sh/react-dom@18.3.1/client";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.54.0";
 
-const USERS_STORAGE_KEY = "northline-demo-users";
-const SESSION_STORAGE_KEY = "northline-demo-session";
-const POSTS_STORAGE_KEY = "northline-demo-posts";
-
 const SUPABASE_CONFIG = window.__SUPABASE_CONFIG__ || {};
 const HAS_SUPABASE_CONFIG = Boolean(
   SUPABASE_CONFIG.url &&
@@ -62,47 +58,6 @@ function strengthMeta(score) {
 
 function normalizeEmail(email) {
   return email.trim().toLowerCase();
-}
-
-function safeRead(key, fallback) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function safeWrite(key, value) {
-  localStorage.setItem(key, JSON.stringify(value));
-}
-
-function readUsers() {
-  return safeRead(USERS_STORAGE_KEY, []);
-}
-
-function saveUsers(users) {
-  safeWrite(USERS_STORAGE_KEY, users);
-}
-
-function readLocalSession() {
-  return safeRead(SESSION_STORAGE_KEY, null);
-}
-
-function saveLocalSession(user) {
-  safeWrite(SESSION_STORAGE_KEY, user);
-}
-
-function clearLocalSession() {
-  localStorage.removeItem(SESSION_STORAGE_KEY);
-}
-
-function readLocalPosts() {
-  return safeRead(POSTS_STORAGE_KEY, []);
-}
-
-function saveLocalPosts(posts) {
-  safeWrite(POSTS_STORAGE_KEY, posts);
 }
 
 function validateEmail(email) {
@@ -195,8 +150,7 @@ function AuthCard({
   updateRegister,
   handleLogin,
   handleRegister,
-  strength,
-  storageLabel
+  strength
 }) {
   return React.createElement("div", { className: "auth-card" },
     React.createElement("div", { className: "panel-header" },
@@ -238,7 +192,7 @@ function AuthCard({
           onChange: (event) => updateLogin("password", event.target.value)
         })
       ),
-      React.createElement("button", { type: "submit", className: "primary-btn", disabled: pending }, pending ? "登录中..." : "立即登录")
+      React.createElement("button", { type: "submit", className: "primary-btn", disabled: pending || !HAS_SUPABASE_CONFIG }, pending ? "登录中..." : "立即登录")
     ),
     mode === "register" && React.createElement("form", { className: "auth-form", onSubmit: handleRegister },
       React.createElement("label", null,
@@ -285,10 +239,10 @@ function AuthCard({
         React.createElement("span", { style: { width: strength.widths, background: strength.colors } })
       ),
       React.createElement("p", { className: "hint" }, `密码强度：${strength.labels}`),
-      React.createElement("button", { type: "submit", className: "primary-btn", disabled: pending }, pending ? "创建中..." : "创建账户")
+      React.createElement("button", { type: "submit", className: "primary-btn", disabled: pending || !HAS_SUPABASE_CONFIG }, pending ? "创建中..." : "创建账户")
     ),
     React.createElement("div", { className: "footer-note" },
-      React.createElement("p", { className: "subtle" }, `当前数据模式：${storageLabel}。没填 Supabase 配置时，页面会自动回退到本地演示模式。`)
+      React.createElement("p", { className: "subtle" }, "当前分支只支持 Supabase 数据库模式。请先完成 `app-config.js` 配置再继续。")
     )
   );
 }
@@ -302,16 +256,9 @@ function HomeView({
   handlePostSubmit,
   handleDeletePost,
   handleLogout,
-  pending,
-  storageLabel
+  pending
 }) {
-  const myPosts = posts.filter((post) => {
-    if (session.id && post.authorId) {
-      return post.authorId === session.id;
-    }
-
-    return post.authorEmail === session.email;
-  });
+  const myPosts = posts.filter((post) => post.authorId === session.id);
 
   return React.createElement("div", { className: "home-shell" },
     React.createElement("section", { className: "hero-panel" },
@@ -327,7 +274,7 @@ function HomeView({
         ),
         React.createElement("div", { className: "meta-strip" },
           React.createElement("span", null, "数据来源"),
-          React.createElement("strong", null, storageLabel)
+          React.createElement("strong", null, "Supabase 数据库")
         ),
         React.createElement("button", {
           type: "button",
@@ -393,7 +340,7 @@ function HomeView({
           React.createElement("p", { className: "kicker" }, "LIVE POSTS"),
           React.createElement("h2", null, "留言板")
         ),
-        React.createElement("p", { className: "subtle" }, "数据库模式下，多设备登录也能看到同一批留言。")
+        React.createElement("p", { className: "subtle" }, "所有数据都通过 Supabase 读写，适合正常的 GitHub + Vercel 工作流。")
       ),
       posts.length === 0
         ? React.createElement("div", { className: "empty-state" }, "还没有留言，发第一条吧。")
@@ -405,7 +352,7 @@ function HomeView({
                   React.createElement("h3", null, post.title),
                   React.createElement("p", { className: "post-meta" }, `${post.authorName} · ${formatDate(post.createdAt)}`)
                 ),
-                (((session.id && post.authorId === session.id) || (!session.id && post.authorEmail === session.email))) &&
+                (post.authorId === session.id) &&
                   React.createElement("button", {
                     type: "button",
                     className: "text-btn",
@@ -426,88 +373,70 @@ function App() {
   const [registerData, setRegisterData] = useState(INITIAL_REGISTER);
   const [postData, setPostData] = useState(INITIAL_POST);
   const [posts, setPosts] = useState([]);
-  const [status, setStatus] = useState({ type: "default", message: "正在检查登录状态..." });
+  const [status, setStatus] = useState({
+    type: HAS_SUPABASE_CONFIG ? "default" : "error",
+    message: HAS_SUPABASE_CONFIG
+      ? "正在检查登录状态..."
+      : "当前分支只支持 Supabase。请先在 `app-config.js` 中填写项目 URL 和 anon key。"
+  });
   const [session, setSession] = useState(null);
   const [pending, setPending] = useState(false);
   const deferredPassword = useDeferredValue(registerData.password);
   const strength = strengthMeta(getPasswordStrength(deferredPassword));
-  const storageLabel = HAS_SUPABASE_CONFIG ? "Supabase 数据库" : "本地演示模式";
 
   async function refreshPosts() {
-    if (HAS_SUPABASE_CONFIG) {
-      setPosts(await loadSupabasePosts());
-      return;
-    }
-
-    setPosts(readLocalPosts());
+    setPosts(await loadSupabasePosts());
   }
 
   useEffect(() => {
+    if (!HAS_SUPABASE_CONFIG) {
+      return undefined;
+    }
+
     let active = true;
-    let subscription;
 
     async function bootstrap() {
       try {
         await refreshPosts();
+        const currentUser = await getSupabaseSessionUser();
 
-        if (HAS_SUPABASE_CONFIG) {
-          const currentUser = await getSupabaseSessionUser();
+        if (!active) {
+          return;
+        }
 
-          if (!active) {
-            return;
-          }
-
-          if (currentUser) {
-            setSession(currentUser);
-            setStatus({ type: "success", message: `已登录，欢迎回来，${currentUser.name}。` });
-          } else {
-            setStatus({ type: "warning", message: "当前未登录，请使用数据库账号登录。" });
-          }
-
-          const authListener = supabase.auth.onAuthStateChange(async (_event, currentSession) => {
-            if (!active) {
-              return;
-            }
-
-            const mappedUser = mapSupabaseUser(currentSession?.user || null);
-            setSession(mappedUser);
-
-            if (!mappedUser) {
-              setStatus({ type: "default", message: "你已退出登录。" });
-            }
-          });
-
-          subscription = authListener.data.subscription;
+        if (currentUser) {
+          setSession(currentUser);
+          setStatus({ type: "success", message: `已登录，欢迎回来，${currentUser.name}。` });
         } else {
-          const savedSession = readLocalSession();
-
-          if (savedSession) {
-            setSession(savedSession);
-            setStatus({ type: "success", message: `已登录，欢迎回来，${savedSession.name}。` });
-          } else {
-            setStatus({ type: "warning", message: "当前未登录，你可以先注册一个演示账号。" });
-          }
+          setStatus({ type: "warning", message: "当前未登录，请使用数据库账号登录。" });
         }
       } catch (error) {
         if (active) {
-          setStatus({ type: "error", message: error.message || "初始化失败，请检查配置。" });
+          setStatus({ type: "error", message: error.message || "初始化失败，请检查 Supabase 配置。" });
         }
       }
     }
 
     bootstrap();
 
+    const authListener = supabase.auth.onAuthStateChange(async (_event, currentSession) => {
+      if (!active) {
+        return;
+      }
+
+      const mappedUser = mapSupabaseUser(currentSession?.user || null);
+      setSession(mappedUser);
+
+      if (!mappedUser) {
+        setStatus({ type: "default", message: "你已退出登录。" });
+      }
+    });
+
     return () => {
       active = false;
-      subscription?.unsubscribe();
+      authListener.data.subscription.unsubscribe();
     };
   }, []);
-
-  function syncLocalPosts(nextPosts) {
-    const sortedPosts = [...nextPosts].sort((a, b) => b.createdAt - a.createdAt);
-    saveLocalPosts(sortedPosts);
-    setPosts(sortedPosts);
-  }
 
   function changeMode(nextMode, resetStatus = true) {
     startTransition(() => {
@@ -559,53 +488,32 @@ function App() {
         throw new Error("两次输入的密码不一致。");
       }
 
-      if (HAS_SUPABASE_CONFIG) {
-        const { data, error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: { name }
-          }
-        });
-
-        if (error) {
-          throw error;
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: { name }
         }
+      });
 
-        if (data.session) {
-          const currentUser = mapSupabaseUser(data.session.user);
-          setSession(currentUser);
-          await refreshPosts();
-          setStatus({ type: "success", message: `注册成功，欢迎你，${currentUser.name}。你已自动登录。` });
-        } else {
-          setStatus({ type: "success", message: "注册成功。若 Supabase 开启了邮箱确认，请先验证邮箱后再登录。" });
-        }
+      if (error) {
+        throw error;
+      }
+
+      if (data.session) {
+        const currentUser = mapSupabaseUser(data.session.user);
+        setSession(currentUser);
+        await refreshPosts();
+        setStatus({ type: "success", message: `注册成功，欢迎你，${currentUser.name}。你已自动登录。` });
       } else {
-        const users = readUsers();
-
-        if (users.some((user) => user.email === email)) {
-          throw new Error("该邮箱已被注册，请直接登录。");
-        }
-
-        const user = { name, email, password };
-        saveUsers([...users, user]);
-
-        const persistedUser = readUsers().find((entry) => entry.email === email);
-        if (!persistedUser) {
-          throw new Error("当前浏览器禁止了本地存储，注册信息没有成功保存。");
-        }
-
-        const safeUser = { id: null, name: user.name, email: user.email };
-        saveLocalSession(safeUser);
-        setSession(safeUser);
-        setStatus({ type: "success", message: `注册成功，欢迎你，${user.name}。你已自动登录。` });
+        setStatus({ type: "success", message: "注册成功。若 Supabase 开启了邮箱确认，请先验证邮箱后再登录。" });
       }
 
       setRegisterData(INITIAL_REGISTER);
       setLoginData(INITIAL_LOGIN);
       changeMode("login", false);
     } catch (error) {
-      setStatus({ type: "error", message: error.message || "注册失败，请检查数据库配置。" });
+      setStatus({ type: "error", message: error.message || "注册失败，请检查 Supabase 配置。" });
     } finally {
       setPending(false);
     }
@@ -623,33 +531,19 @@ function App() {
         throw new Error("请输入有效的邮箱地址。");
       }
 
-      if (HAS_SUPABASE_CONFIG) {
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
-        if (error) {
-          throw error;
-        }
-
-        const currentUser = mapSupabaseUser(data.user);
-        setSession(currentUser);
-        await refreshPosts();
-        setStatus({ type: "success", message: `登录成功，欢迎回来，${currentUser.name}。` });
-      } else {
-        const user = readUsers().find((entry) => entry.email === email && entry.password === password);
-
-        if (!user) {
-          throw new Error("邮箱或密码不正确，请重试。");
-        }
-
-        const safeUser = { id: null, name: user.name, email: user.email };
-        saveLocalSession(safeUser);
-        setSession(safeUser);
-        setStatus({ type: "success", message: `登录成功，欢迎回来，${user.name}。` });
+      if (error) {
+        throw error;
       }
 
+      const currentUser = mapSupabaseUser(data.user);
+      setSession(currentUser);
+      await refreshPosts();
+      setStatus({ type: "success", message: `登录成功，欢迎回来，${currentUser.name}。` });
       setLoginData(INITIAL_LOGIN);
     } catch (error) {
-      setStatus({ type: "error", message: error.message || "登录失败，请检查数据库配置。" });
+      setStatus({ type: "error", message: error.message || "登录失败，请检查 Supabase 配置。" });
     } finally {
       setPending(false);
     }
@@ -659,15 +553,10 @@ function App() {
     setPending(true);
 
     try {
-      if (HAS_SUPABASE_CONFIG) {
-        const { error } = await supabase.auth.signOut();
+      const { error } = await supabase.auth.signOut();
 
-        if (error) {
-          throw error;
-        }
-      } else {
-        clearLocalSession();
-        setSession(null);
+      if (error) {
+        throw error;
       }
 
       setStatus({ type: "default", message: "你已退出登录。" });
@@ -693,37 +582,19 @@ function App() {
         throw new Error("请先填写留言内容。");
       }
 
-      if (HAS_SUPABASE_CONFIG) {
-        const { error } = await supabase.from("messages").insert({
-          title,
-          content,
-          user_id: session.id,
-          author_name: session.name,
-          author_email: session.email
-        });
+      const { error } = await supabase.from("messages").insert({
+        title,
+        content,
+        user_id: session.id,
+        author_name: session.name,
+        author_email: session.email
+      });
 
-        if (error) {
-          throw error;
-        }
-
-        await refreshPosts();
-      } else {
-        const nextPosts = [
-          {
-            id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
-            title,
-            content,
-            authorName: session.name,
-            authorEmail: session.email,
-            authorId: null,
-            createdAt: Date.now()
-          },
-          ...posts
-        ];
-
-        syncLocalPosts(nextPosts);
+      if (error) {
+        throw error;
       }
 
+      await refreshPosts();
       setPostData(INITIAL_POST);
       setStatus({ type: "success", message: "留言发布成功，已经显示在留言板中。" });
     } catch (error) {
@@ -733,23 +604,17 @@ function App() {
 
   async function handleDeletePost(postId) {
     try {
-      if (HAS_SUPABASE_CONFIG) {
-        const { error } = await supabase
-          .from("messages")
-          .delete()
-          .eq("id", postId)
-          .eq("user_id", session.id);
+      const { error } = await supabase
+        .from("messages")
+        .delete()
+        .eq("id", postId)
+        .eq("user_id", session.id);
 
-        if (error) {
-          throw error;
-        }
-
-        await refreshPosts();
-      } else {
-        const nextPosts = posts.filter((post) => post.id !== postId);
-        syncLocalPosts(nextPosts);
+      if (error) {
+        throw error;
       }
 
+      await refreshPosts();
       setStatus({ type: "default", message: "留言已删除。" });
     } catch (error) {
       setStatus({ type: "error", message: error.message || "删除留言失败。" });
@@ -760,20 +625,20 @@ function App() {
     !session && React.createElement("section", { className: "brand-panel" },
       React.createElement("div", { className: "brand-copy" },
         React.createElement("p", { className: "eyebrow" }, "NORTHLINE"),
-        React.createElement("h1", null, "把登录、主页和留言，连成一个小站。"),
-        React.createElement("p", { className: "intro" }, "这个分支已经准备好接 Supabase 数据库。填完配置后，注册、登录和留言就能跨设备同步；不填配置时依然可以本地演示。"),
+        React.createElement("h1", null, "把登录、主页和留言，连成一个真正带数据库的小站。"),
+        React.createElement("p", { className: "intro" }, "这个分支只保留 Supabase 正式路径，去掉了本地演示回退逻辑，更适合 GitHub + Vercel 持续更新。"),
         React.createElement("div", { className: "feature-list", "aria-label": "站点亮点" },
           React.createElement("div", null,
             React.createElement("span", null, "01"),
-            React.createElement("p", null, "Supabase Auth 负责注册和登录，省掉自建密码逻辑。")
+            React.createElement("p", null, "Supabase Auth 负责注册和登录，不再保留浏览器本地账号逻辑。")
           ),
           React.createElement("div", null,
             React.createElement("span", null, "02"),
-            React.createElement("p", null, "留言通过 `messages` 表持久化，多个设备能看到同一批数据。")
+            React.createElement("p", null, "留言通过 `messages` 表持久化，多设备能看到同一批内容。")
           ),
           React.createElement("div", null,
             React.createElement("span", null, "03"),
-            React.createElement("p", null, `当前运行模式：${storageLabel}。`)
+            React.createElement("p", null, "没配数据库时会直接报配置缺失，不再偷偷走本地模式。")
           )
         )
       )
@@ -789,8 +654,7 @@ function App() {
             handlePostSubmit,
             handleDeletePost,
             handleLogout,
-            pending,
-            storageLabel
+            pending
           })
         : React.createElement(AuthCard, {
             mode,
@@ -803,8 +667,7 @@ function App() {
             updateRegister,
             handleLogin,
             handleRegister,
-            strength,
-            storageLabel
+            strength
           })
     )
   );

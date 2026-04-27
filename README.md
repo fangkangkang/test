@@ -2,11 +2,11 @@
 
 一个基于纯前端 React 的简单登录注册网站，包含个人主页和留言板功能，适合课程作业、原型展示和静态部署场景。
 
-当前 `codex-db-integration` 分支已经准备好接入 Supabase：
+当前 `codex-db-integration` 分支已经切成标准的 Supabase 版本：
 
 - 认证使用 Supabase Auth
 - 留言板使用 Supabase `messages` 表
-- 如果还没填数据库配置，页面会自动回退到 `localStorage` 演示模式
+- 不再保留 `localStorage` 回退逻辑
 
 ## 功能
 
@@ -17,7 +17,7 @@
 - 登录后进入个人主页
 - 留言板支持发布和删除自己的留言
 - 支持 Supabase 数据库模式
-- 未配置数据库时自动回退到本地演示模式
+- 未配置数据库时直接提示配置缺失
 
 ## 技术结构
 
@@ -33,11 +33,7 @@
 
 这个项目不依赖打包构建，直接部署静态文件即可运行。
 
-如果没有填写 `app-config.js`，账号和留言只保存在当前浏览器本地，因此：
-
-- 换浏览器后数据不会同步
-- 清空浏览器缓存后数据会丢失
-- 适合演示，不适合真实生产认证
+这个分支默认要求先完成 Supabase 配置，再进行登录和留言测试。
 
 ## Supabase 接入步骤
 
@@ -57,7 +53,24 @@ window.__SUPABASE_CONFIG__ = {
 };
 ```
 
-完成后，注册、登录和留言就会走 Supabase，不再只保存在本地。
+完成后，注册、登录和留言都会直接走 Supabase。
+
+## GitHub 工作流
+
+推荐流程：
+
+1. 在这个分支上开发和提交
+2. 推送分支到 GitHub
+3. 让 Vercel 为该分支生成预览部署
+4. 验证通过后再合并到主分支
+
+示例命令：
+
+```powershell
+git add .
+git commit -m "feat: connect supabase auth and messages"
+git push -u origin codex-db-integration
+```
 
 ## 部署到 Vercel
 
